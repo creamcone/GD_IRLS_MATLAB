@@ -1,4 +1,4 @@
-function [k0esti,f1esti]=GD_IRLS(xt,fs)
+function [k0esti,f1esti]=GD_IRLS(zn,fs)
 %% The description of the algorithm
 % (1) The function
 %     By the algorithm, the frequency parameters of HFM signal, including the starting frequency and period slope, can be estimated based on the characteristics of group delay (GD).
@@ -8,7 +8,7 @@ function [k0esti,f1esti]=GD_IRLS(xt,fs)
 %     The GD in the FDR of the HFM signal is extracted,
 %     and the frequency parameters are estimated by combining the continuity criterion and iteratively reweighted least squares (IRLS) linear fitting on the GD.
 % (2) The input
-%     xt:      the analyzed HFM signal
+%     zn:      the analyzed HFM signal
 %     fs:      sampling frequency
 % (3) The output
 %     k0esti:  the estimated period slope
@@ -17,12 +17,11 @@ function [k0esti,f1esti]=GD_IRLS(xt,fs)
 %% STEP 1 Estimate the frequency distribution range (FDR) and extract the group delay (GD) of the HFM signal
 %% STEP 1 A
 %  Obtain the amplitude spectrum (AS) & spectrum phase (SP)
-L=length(xt);
-deltaf=fs/L;                 % frequency resolution
-fx=(0:L/2-1)*deltaf;
-xtf=fft(xt);
-xfa=abs(xtf(1:L/2));         % AS
-xfp=angle(xtf(1:L/2));       % SP
+N=length(zn);
+deltaf=fs/N;                 % frequency resolution
+xf=fft(zn);
+xfa=abs(xf(1:N/2));          % AS
+xfp=angle(xf(1:N/2));        % SP
 
 %% STEP 1 B
 %  Normalize and iteratively smooth the AS
@@ -31,112 +30,109 @@ fdw=fs/20;
 indexdw=round(fdw/deltaf);
 xfa([1:indexdw LF-indexdw+1:LF])=0;
 
-XFRO=xfa;
+xfas0=xfa;
 sumold=0;
 for k=1:10
-    XFRN=smooth(XFRO,9);               % smoothed AS (SAS)
-    sumnew=sum(abs(XFRN'-xfa).^2);
+    xfasn=smooth(xfas0,9);               % smoothed AS (SAS)
+    sumnew=sum(abs(xfasn'-xfa).^2);
     if  k>1 && abs(sumnew-sumold)<0.01*sumnew
         break;
     end
-    sumold=sum(abs(XFRN'-xfa).^2);
-    XFRO=XFRN;
+    sumold=sum(abs(xfasn'-xfa).^2);
+    xfas0=xfasn;
 end
-XFRS=XFRN;                             % iterative SAS (ISAS)
-xfasn=XFRS/max(XFRS);                  % normalized ISAS (NISAS)
-xfasn=xfasn';        
+xfais=xfasn;                             % iterative SAS (ISAS)
+xfanis=xfais/max(xfais);                 % normalized ISAS (NISAS)
+xfanis=xfanis';        
 
 %% STEP 1 C
 %  Perform the histogram statistics
-[~,indexsM]=max(xfasn);
-xx=0.05:0.1:0.95;
-[nh,xh]=hist(xfasn,xx);
+[~,indexsM]=max(xfanis);
+xc=0.05:0.1:0.95;
+[H,~]=hist(xfanis,xc);
 
 %% STEP 1 D
 %  Estimate the bandwidth
-nhn=nh/max(nh);
-nhr=nhn;
-index=find((xh<0.4)|(xh>0.9));                 % the considered high-energy statistical range is [0.4,0.9]
-nhr(index)=0;
-[~,mh]=max(nhr);
-Amp_Sig=xx(mh);
+H=H/max(H);
+index=find((xc<0.4)|(xc>0.9));                 % the considered high-energy statistical range is [0.4,0.9]
+H(index)=0;
+[~,mh]=max(H);
+lambda=xc(mh);
 
-indexsig=find(xfasn>max(Amp_Sig-0.1,0.7));     % preliminarily determine the signal bandwidth according to the signal amplitude and minimum threshold (0.7 Corresponds to 3dB bandwidth)
+indexsig=find(xfanis>max(lambda-0.1,0.7));     % preliminarily determine the signal bandwidth according to the adaptive threshold and minimum threshold (0.7 Corresponds to 3dB bandwidth)
 indexsigs=sort(indexsig);
-FB_LS=length(indexsigs);                       % bandwidth
+nh=length(indexsigs);                          % bandwidth
 
 %% STEP 1 E
 %  Estimate the gravity frequency (GF)
-indexsigsel=indexsigs([min(3,FB_LS):max(FB_LS-3,1)]);
+indexsigsel=indexsigs([min(3,nh):max(nh-3,1)]);
 if length(indexsigsel)<3
    indexsigsel=indexsigs;
 end
-indexweight=sum(indexsigsel.*xfasn(indexsigsel))/sum(xfasn(indexsigsel));
-indexweight=round(indexweight);
-fw=(indexweight-1)*deltaf;                     % GF
+kg=sum(indexsigsel.*xfanis(indexsigsel))/sum(xfanis(indexsigsel));
+kg=round(kg);
+GF=(kg-1)*deltaf;                     % GF
 
 %% STEP 1 F
 %  Calculate the upward feature (UF) and downward feature (DF)
-xfasnd=diff(xfasn);
-xfasnd=[xfasnd,0];
+sigmak=diff(xfanis);
+sigmak=[sigmak,0];
 
-wcl=max(round(0.2*FB_LS),round(indexweight*0.05));
-if rem(wcl,2)==0
-    wcl=wcl+1;
+krwmul=max(round(0.2*nh),round(0.05*kg));
+if rem(krwmul,2)==0
+    krwmul=krwmul+1;
 end
-wclh=max((wcl-1)/2,1);                         % the reference window length
+krw=max((krwmul-1)/2,1);                         % the reference window length
 
-xfasnup=zeros(1,LF);
-xfasnde=zeros(1,LF);
-for kk=wclh+1:LF-1-wclh
-    indexkk=kk-wclh:kk+wclh;
-    tempkkd=xfasnd(indexkk);
-    indexp=find(tempkkd>0);
-    indexn=find(tempkkd<0);
-    xfasnup(kk)=length(indexp);
-    xfasnde(kk)=length(indexn);
+Crk=zeros(1,LF);
+Cfk=zeros(1,LF);
+for k=krw+1:LF-1-krw
+    kd=k-krw:k+krw;
+    sigmakkd=sigmak(kd);
+    Crk(k)=length(find(sigmakkd>0));
+    Cfk(k)=length(find(sigmakkd<0));
 end
-xfasnup=xfasnup/max(xfasnup);
-xfasnde=xfasnde/max(xfasnde);
+Crk=Crk/max(Crk);
+Cfk=Cfk/max(Cfk);
 
-xfasnupmd=xfasnd.*xfasnup;
-xfasndemd=xfasnd.*xfasnde;
-xfasnupmd=xfasnupmd/max(abs(xfasnupmd));        % UF
-xfasndemd=xfasndemd/max(abs(xfasndemd));        % DF
+Uk=sigmak.*Crk;
+Dk=sigmak.*Cfk;
+Uk=Uk/max(abs(Uk));        % UF
+Dk=Dk/max(abs(Dk));        % DF
 
 %% STEP 1 G
 %  Estimate the lower bound frequency (LBF) and upper bound frequency (UBF)
-indexw=round(1.1*min(round(indexweight/5),FB_LS));         % the searching window length
+ksw=round(1.1*min(round(kg/5),nh));         % the searching window length
 
-[~,indexLL]=max(xfasnupmd(max(indexweight-1,1):-1:max(indexweight-indexw,1)));
-indexsL=indexweight-indexLL;
-[~,indexRR]=min(xfasndemd(min(indexweight+1,LF):1:min(indexweight+indexw,LF)));
-indexsR=indexweight+indexRR;
-if isempty(indexsL)==1
-    indexsL=indexweight;
+[~,indexLL]=max(Uk(max(kg-1,1):-1:max(kg-ksw,1)));
+klb=kg-indexLL;
+[~,indexRR]=min(Dk(min(kg+1,LF):1:min(kg+ksw,LF)));
+khb=kg+indexRR;
+if isempty(klb)==1
+    klb=kg;
 end
-if isempty(indexsR)==1
-    indexsR=indexweight;
+if isempty(khb)==1
+    khb=kg;
 end
 
-fL=(indexsL-1)*deltaf;                 % LBF
-fH=(indexsR-1)*deltaf;                 % UBF
-fM=(indexsM-1)*deltaf;                 % the peak frequency
+flb=(klb-1)*deltaf;                       % LBF
+fhb=(khb-1)*deltaf;                       % UBF
+fpeak=(indexsM-1)*deltaf;                 % the peak frequency
 
 %% STEP 1 H
 %  Extract the GD in the FDR
-xfpdu=diff(xfp);
-for k=1:L/2-1
+xfpd=diff(xfp);
+for k=1:N/2-1
     kk=0;
-    while xfpdu(k)>0 && kk<10
+    while xfpd(k)>0 && kk<10
         kk=kk+1;
-        xfpdu(k)= xfpdu(k)-2*pi;  
+        xfpd(k)= xfpd(k)-2*pi;  
     end
 end
-taudka=-xfpdu((1:L/2-1))/(2*pi*deltaf);           % GD in the full band
+taudka=-xfpd((1:N/2-1))/(2*pi*deltaf);           % GD in the full band
 
-fk=((indexsL:indexsR)-1)*deltaf;
-taudk=taudka(indexsL:indexsR);                    % GD in the FDR
+fk=((klb:khb)-1)*deltaf;
+taudk=taudka(klb:khb);                           % GD in the FDR
 xk=1./fk;
 yk=taudk;
 
@@ -145,45 +141,45 @@ yk=taudk;
 %  To eliminate the isolated outliers by the criterion of continuity
 xkm=xk;
 ykm=yk;
-LTM=length(ykm);
+LA=length(ykm);
 IndexOutlier=[];                            % isolated outliers
-maximum=max(ykm);
+maximumtaudk=max(ykm);
 
-for mm=3:LTM-2
-    if  (      (abs(ykm(mm)-ykm(mm-1))>0.25*maximum && abs(ykm(mm)-ykm(mm+1))>0.1*maximum)...
-            || (abs(ykm(mm)-ykm(mm+1))>0.25*maximum && abs(ykm(mm)-ykm(mm-1))>0.1*maximum)...
-            || (abs(ykm(mm)-ykm(mm-1))>0.15*maximum && abs(ykm(mm)-ykm(mm+1))>0.15*maximum)...
-            || (abs(ykm(mm)-ykm(mm-2))>0.25*maximum && abs(ykm(mm)-ykm(mm+2))>0.1*maximum)...
-            || (abs(ykm(mm)-ykm(mm+2))>0.25*maximum && abs(ykm(mm)-ykm(mm-2))>0.1*maximum)...
-            || (abs(ykm(mm)-ykm(mm-2))>0.15*maximum && abs(ykm(mm)-ykm(mm+2))>0.15*maximum)...
-            || (abs(ykm(mm)-ykm(mm-2))>0.25*maximum && abs(ykm(mm)-ykm(mm+1))>0.1*maximum)...
-            || (abs(ykm(mm)-ykm(mm+2))>0.25*maximum && abs(ykm(mm)-ykm(mm-1))>0.1*maximum))
-        IndexOutlier=[IndexOutlier mm];
+for i=3:LA-2
+    if  (      (abs(ykm(i)-ykm(i-1))>0.25*maximumtaudk && abs(ykm(i)-ykm(i+1))>0.1*maximumtaudk)...
+            || (abs(ykm(i)-ykm(i+1))>0.25*maximumtaudk && abs(ykm(i)-ykm(i-1))>0.1*maximumtaudk)...
+            || (abs(ykm(i)-ykm(i-1))>0.15*maximumtaudk && abs(ykm(i)-ykm(i+1))>0.15*maximumtaudk)...
+            || (abs(ykm(i)-ykm(i-2))>0.25*maximumtaudk && abs(ykm(i)-ykm(i+2))>0.1*maximumtaudk)...
+            || (abs(ykm(i)-ykm(i+2))>0.25*maximumtaudk && abs(ykm(i)-ykm(i-2))>0.1*maximumtaudk)...
+            || (abs(ykm(i)-ykm(i-2))>0.15*maximumtaudk && abs(ykm(i)-ykm(i+2))>0.15*maximumtaudk)...
+            || (abs(ykm(i)-ykm(i-2))>0.25*maximumtaudk && abs(ykm(i)-ykm(i+1))>0.1*maximumtaudk)...
+            || (abs(ykm(i)-ykm(i+2))>0.25*maximumtaudk && abs(ykm(i)-ykm(i-1))>0.1*maximumtaudk))
+        IndexOutlier=[IndexOutlier i];
     end
 end
 
-xkmcd=xkm;
-ykmcd=ykm;
-xkmcd(IndexOutlier)=[];
-ykmcd(IndexOutlier)=[];                      % normal GD points
+xkmnormal=xkm;
+ykmnormal=ykm;
+xkmnormal(IndexOutlier)=[];
+ykmnormal(IndexOutlier)=[];                      % normal GD points
 
 %% STEP 2 B & C
 %  Perform the IRLS linear fitting on the extracted GD
-[pr]=robustfit(xkmcd,ykmcd);
+[b]=robustfit(xkmnormal,ykmnormal);
 
 %% STEP 3 Estimate the frequency parameters
-k0esti=-1/pr(2);
-f1esti=-pr(2)/pr(1);
+k0esti=-1/b(2);
+f1esti=-b(2)/b(1);
 
 % The estimated f1 (f1esti) cannot be negative
-% Therefore, the peak frequency (fM) is taken if f1esti is negative
+% Therefore, the peak frequency is taken if f1esti is negative
 if f1esti<0
-    f1esti=fM;
+    f1esti=fpeak;
 end
 
 end
 
-function [p]=robustfit(x,y)
+function [b]=robustfit(x,y)
 %% The description of the IRLS algorithm
 % (1) The function
 %     By the algorithm, the iteratively reweighted least squares (IRLS) linear fitting can be performed.
@@ -204,13 +200,13 @@ n_fit=length(x_fit);
 G=[ones(1,n_fit);x_fit'].';
 
 % the conventional least squares (CLS)
-p_0=(G'*G)\G'*y_fit;
-ytfit_0=p_0(2)*x_fit+p_0(1);
+b_0=(G'*G)\G'*y_fit;
+ytfit_0=b_0(2)*x_fit+b_0(1);
 JLast_0=sum(abs(y_fit-ytfit_0).^2);
 
 % the iteratively reweighted linear fitting (IRLS)
-Nmax=10;
-i=1;
+Qmax=10;
+q=1;
 JLast=JLast_0;
 
 while(1)
@@ -219,15 +215,15 @@ while(1)
     index=find(w<0.75);
     w(index)=0;
     W_q=diag(w);
-    p_q=(G'*W_q*G)\(G')*W_q*y_fit;
-    ytfit_q=p_q(2)*x_fit+p_q(1);
+    b_q=(G'*W_q*G)\(G')*W_q*y_fit;
+    ytfit_q=b_q(2)*x_fit+b_q(1);
     JCur=sum(w.*abs(y_fit-ytfit_q).^2);
-    if (abs(JCur-JLast)/JLast<0.01) || (i==Nmax)
+    if (abs(JCur-JLast)/JLast<0.01) || (q==Qmax)
         break;
     end
     JLast=JCur;
     ytfit_0=ytfit_q;
-    i=i+1;
+    q=q+1;
 end
-p=p_q;
+b=b_q;
 end
